@@ -1,0 +1,36 @@
+(ns galasox.sox
+  (:gen-class)
+  (:use [galasox.soxcore])
+  (:require [clojure.core.async :as async]
+            [swiss.arrows :refer :all]))
+
+(def handler
+  (with-client client
+    (prn client "connected")
+    (with-data client data (send! client data)) ;;echo back
+    (prn client "disconnected")))
+
+(def instream (async/chan (async/sliding-buffer 64)))
+(def clienthandler
+  (with-client client
+    (prn  "client is now connected")
+    (with-data client data (async/go(async/>! instream data)))
+    (prn "client is now disconnected")))
+
+(def conn-details {:port 4503
+                   :host "localhost"
+                   :handler handler})
+
+
+(def myserver (start-server conn-details))
+myserver
+(stop-server myserver)
+
+
+(def client-conn (start-client (conj conn-details {:handler clienthandler})))
+client-conn
+(send! client-conn "boo")
+(stop-client client-conn)
+
+(prn (peek! instream))
+(prn (peek! ds))

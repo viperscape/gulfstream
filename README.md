@@ -8,6 +8,7 @@ clone this repo, run lein repl.
 
 ## Usage
 
+```clojure
 (ns gulfstream.client
   (:gen-class)
   (:use [gulfstream.core]
@@ -42,7 +43,7 @@ clone this repo, run lein repl.
 	(conj conn-details {:handler clienthandler}))) ;;conj client-handler to replace server-handler functions
 (send! client-conn "woot")
 ;(stop-client client-conn) ;;shuts client down and disconnects socket
-
+```
 
 
 ### Future implementations
