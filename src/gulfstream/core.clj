@@ -23,33 +23,46 @@ returns seq if specifying max elements to pull"
       (.shutdownOutput)
       (.close))))
 
+(defn- ws-mask [data]
+  "creates and masks buffer data :todo merge decode mask for conciseness"
+  (let [mask (take 4 (repeatedly #(unchecked-byte(rand-int 255))))
+        buf (make-array Byte/TYPE (count data))]
+    (loop [i 0, j 0]
+      (aset-byte buf j (byte (bit-xor (nth data i) (nth mask (mod j 4)))))
+      (if (< i (dec(count data))) (recur (inc i) (inc j))))
+    {:mask mask :data buf}))
 
-(defn- ws-encode [data]
+
+(defn- ws-encode [data & args]
   "takes in bytes, return websocket frame (no chunking available); todo:chunk"
-  (let [len (count data)
+  (let [mres (if-not (empty? (filter #{:mask} args)) (ws-mask data) nil)
+        _ (prn "mres:" mres)
+        data  (if mres (:data mres) data)
+        len (count data)
         blen (if (> len 65535) 10 (if (> len 125) 4 2))
-        buf (make-array Byte/TYPE (+ len blen))
+        buf (make-array Byte/TYPE (+ len blen (if mres 4 0)))
         _ (aset-byte buf 0 -127) ;;(bit-or (unchecked-byte 0x80) (unchecked-byte 0x1)
         _ (if (= 2 blen) 
-            (aset-byte buf 1 len) ;;mask 0, len
+            (aset-byte buf 1 (bit-or (if mres 1 0) len))
             (do
               (dorun(map #(aset-byte buf %1 (unchecked-byte (bit-and (bit-shift-right len (*(- %2 2) 8)) 255))) (range 2 blen) (into ()(range 2 blen))))
               (aset-byte buf 1 (if (> blen 4) 127 126))))
-        _ (System/arraycopy data 0 buf blen len)]
+        _ (if mres (dorun (map #(aset-byte buf (+ % blen) (nth (:mask mres) %)) (range 4))))
+        _ (System/arraycopy data 0 buf (+ blen (if mres 4 0)) len)]
     buf))
-
 
 (defn send! [conn data]
   "writes to buffered output stream and flushes"
   (let [d (if (string? data) (.getBytes data "UTF8") data)
-        d (if (:ws? conn) (try(ws-encode d)(catch Exception e (put! ds {:error (.getMessage e)}))) d)] ;;encode if necessary
-    (prn "sending:" (String. d "UTF8"))
+        d (if (or (:ws? conn)(:ws conn)) (ws-encode d (if (:ws conn) :mask)) d)] ;;encode if necessary
+    (prn "sending:" (String. (if (:ws conn) (ws-decode {:data d :size (count d)}) d) "UTF8"))
      (doto (:bouts conn)
        (.write d 0 (count d))
        (.flush))))
 
 
 ;;websocket stuff- todo: move to another file?
+
 (defn- ws-decode [frame]
   "decodes websocket frame"
   (let [data (:data frame)
@@ -62,17 +75,16 @@ returns seq if specifying max elements to pull"
       (if (< i (dec(:size frame))) (recur (inc i) (inc j))))
     msg))
 
-
-
 (defn- get-ws-key [req]
   (first(clojure.string/split(second(clojure.string/split req #"Sec-WebSocket-Key: ")) #"\r\n")))
 
 (defn- make-ws-hash [key]
-  (let [s (str key "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")]
-    (String.(base64/encode(.digest (java.security.MessageDigest/getInstance "sha1") (.getBytes s))) "UTF8")))
+  (if key
+    (let [s (str key "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")]
+      (String.(base64/encode(.digest (java.security.MessageDigest/getInstance "sha1") (.getBytes s))) "UTF8"))))
 
 (defn- ws-handshake [req]
-  (let [key (make-ws-hash (get-ws-key req))]
+  (if-let [key (make-ws-hash (get-ws-key req))]
     (str "HTTP/1.1 101 Switching Protocols\r\n"
        "Upgrade: websocket\r\n"
        "Connection: Upgrade\r\n"
@@ -108,7 +120,7 @@ returns seq if specifying max elements to pull"
   "listens to clients instream socket"
   (loop [data (if-not (:ws? conn)(:frame conn))]
     (when(> (or (:size data)0) -1)
-      (if-let [data (if data(if (:ws? conn) (String. (ws-decode data) "UTF8") (str-chunk data)))]
+      (if-let [data (if data(if (or (:ws conn)(:ws? conn)) (String. (ws-decode data) "UTF8") (str-chunk data)))]
         ;; todo: handle onclose op codes for websockets
         (try(fun data)
             (catch Exception e (put! ds {:listen-error (.getMessage e)}))))
@@ -183,7 +195,7 @@ returns seq if specifying max elements to pull"
 
 
 (defn start-client [server]
-  (let [client (build-client (Socket. (:host server) (:port server)))
+  (let [client (conj server (build-client (Socket. (:host server) (:port server))))
         client (conj client {:thread (thread(handle-conn (conj client server)))})]
     client))
 (defn stop-client [client]
