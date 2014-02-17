@@ -60,7 +60,7 @@ This is not a fully RFC compliant spec websocket server nor client, but it's clo
 
 I am considering about adding an async option for both client and server by using go blocks instead of threads-- though performance may suffer; we'll see.
 
-I am planning to include both ping-pong support as well as frame continuations for websockets, but need to consider raw tcp sockets as well for this to be homogenous-- this is a phase 2 sort of thing.
+I am planning to include both ping-pong support as well as frame continuations for websockets, but need to consider raw tcp sockets as well for this to be homogenous. In addition I'd like to get away from mostly supporting string and support bytes as well, currently this is only possible with send!, not on receive (yet). These are a phase 2 sort of thing.
 
 I am requesting pulls for a clojurescript variant of the client, ideally I'd like to make the client-handler the exact same but specify in connection details something like (conj conn-details {:cljs true}) and implement a backend set of functions that converts and builds a basic javascript websocket client. Keeping the client-handler peice is key.
 
