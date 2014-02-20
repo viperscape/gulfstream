@@ -20,7 +20,7 @@ For now clone this repo, run lein repl.
     (prn "client connected!")
     (send! client "welcome!")
     (with-data client data ;;logical listen loop is here, anything before is just when initially connected, after is when disconnected
-      (send! client data) ;;echo back whatever client sent
+      (if (=(:route client)"echo")(send! client data)) ;;echo back whatever client sent, only if connected at echo route
       (prn "received:" data))
     (prn client "disconnected")))
 

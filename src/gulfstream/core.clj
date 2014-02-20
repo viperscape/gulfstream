@@ -48,8 +48,9 @@ returns seq if specifying max elements to pull"
 (defn send! [conn data & args]
   "writes to buffered output stream and flushes"
   (let [prestine? (some #{:prestine} args)
+        op (if (string? data) 1 2) ;;text or binary op code for websockets
         d (if (and(string? data)(not prestine?)) (.getBytes data "UTF8") data) ;;we have to send utf8 bytes for websockets
-        d (if (and(:ws? conn)(not prestine?)) (ws-encode d (if-not (:serversocket conn) :mask)) d)]
+        d (if (and(:ws? conn)(not prestine?)) (ws-encode d {:op op} (if-not (:serversocket conn) :mask)) d)]
     (doto (:bouts conn)
       (.write d 0 (count d))
       (.flush))))
@@ -99,24 +100,26 @@ returns seq if specifying max elements to pull"
        ;"Sec-WebSocket-Protocol: chat\r\n" ;;todo: provide subprotocol support for non-ws sockets as well
        "\r\n")))
 
-(defn- ws-new-handshake [host port]
-  (str "GET / HTTP/1.1\r\n"
-       "Host: " host ":" port "\r\n"
-       "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-       "Origin: gulfstream/clojure\r\n"
-       "Pragma: no-cache\r\nCache-Control: no-cache\r\n"
-       "Sec-WebSocket-Key: " (String.(clojure.data.codec.base64/encode (byte-array(map #(byte %)(take 16(repeatedly #(unchecked-byte(rand 255))))))) "UTF8")  "\r\n"
-       "Sec-WebSocket-Version: 13\r\n"
+(defn- ws-new-handshake [host port & args]
+  (let [route (some #{:route} args)]
+    (str "GET /" route " HTTP/1.1\r\n"
+         "Host: " host ":" port "\r\n"
+         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+         "Origin: gulfstream/clojure\r\n"
+         "Pragma: no-cache\r\nCache-Control: no-cache\r\n"
+         "Sec-WebSocket-Key: " (String.(clojure.data.codec.base64/encode (byte-array(map #(byte %)(take 16(repeatedly #(unchecked-byte(rand 255))))))) "UTF8")  "\r\n"
+         "Sec-WebSocket-Version: 13\r\n"
       ; "Sec-WebSocket-Extensions: x-webkit-deflate-frame\r\n"
       ; "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/31.0.1650.63 Safari/537.36\r\n"
-       "\r\n"))
+         "\r\n")))
 
 
 
 (defn- req-ws! [req conn]
   (if (.startsWith req "GET") ;;websocket upgrade?
     (do(send! conn (ws-handshake req))
-       true)
+       (conj conn {:ws? true :route (first(clojure.string/split (second(clojure.string/split req #" /")) #" "))}))
+       ;true)
     false))
 ;;end websocket stuff
 
@@ -133,6 +136,7 @@ returns seq if specifying max elements to pull"
 
 (defn str-chunk [chunk]
   "returns a utf8 string of the data-chunk map received in stream from get-chunk"
+  (prn (type(first(:data chunk))))
   (String. (:data chunk) 0 (:size chunk) "UTF8"))
 
 
@@ -141,14 +145,15 @@ returns seq if specifying max elements to pull"
   "listens to clients instream socket"
   (loop [data (if-not (:ws? conn) (:frame conn))]
     (when(> (or (:size data)0) -1)
-      (if-let [d (if data (if (:ws? conn) 
+      (when-let [d (if data (if (:ws? conn) 
                                (let [d (ws-decode data)]
                                  (cond 
                                   (= (:op d) 1) (String. (:data d) "UTF8") ;;text frame
                                   (= (:op d) 2) (:data d) ;;binary frame
                                   (= (:op d) 8) (do(stop-client conn)nil) ;;op close?
                                   :else (do(put! ds (str "else" (:op d)))nil)))
-                               (str-chunk data)))]
+                               (:data data)))]
+        ;(prn (String. (last(:data data))))
         (try(fun d)
             (catch Exception e (put! ds {:listen-error (.getMessage e)}))))
       (recur (get-chunk conn (:data(:frame conn)))))))
@@ -180,14 +185,14 @@ returns seq if specifying max elements to pull"
         (if (:serversocket conn)
           (let [buf (make-array Byte/TYPE 4096)
                 data (get-chunk conn buf) ;;blocks and waits
-                ws-handshake? (req-ws! (str-chunk data) conn)
-                conn (conj conn {:ws? ws-handshake? :frame data})]
+                conn (or(req-ws! (str-chunk data) conn)(conj conn {:ws? false}))
+                conn (conj conn {:frame data})]
             conn)
           ;;handle if client is connecting to websocket server
           (let [conn (conj conn {:frame {:size 0 :data (make-array Byte/TYPE 4096)}})]
             (if (:ws? conn) 
               (do
-                 (send! (conj conn {:ws? nil}) (ws-new-handshake (:host conn) (:port conn)))
+                 (send! (conj conn {:ws? nil}) (ws-new-handshake (:host conn) (:port conn) (:route conn)))
                  (get-chunk conn (:data(:frame conn))) ;;wait and accept handshake, throw it away and start handler down below; todo: verify handshake sec key?
                ))
               conn))]
@@ -232,6 +237,6 @@ returns seq if specifying max elements to pull"
         client (conj client {:thread (thread(handle-conn (conj client server)))})]
     client))
 (defn stop-client [conn]
-  (when-not (.isClosed (:socket conn))
+  (when-not (and(.isClosed (:socket conn))(if-not (:serversocket conn)(.isClosed (:serversocket conn))))
     (if(:ws? conn) (send! conn (ws-encode (.getBytes "\r\n" "UTF8") {:op 8} (if-not (:serversocket conn) :mask)) :prestine)) ;;send websocket close, but don't wait for response
     (close-socket (:socket conn))))
