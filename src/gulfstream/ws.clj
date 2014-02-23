@@ -33,7 +33,7 @@
   "decodes websocket frame"
   (let [data (:data frame)
         op (bit-and (first data) 0x0f)]
-    (if-not (= op 8)
+    (if-not (>= op 8)
       (let [dlen (bit-and (second data) 127) ;0x7f/127
             mask? (= 1(bit-and(bit-shift-right (second data) 7) 1)) ;;has a mask?
             mstart (if (== dlen 127) 10 (if (== dlen 126) 4 2))

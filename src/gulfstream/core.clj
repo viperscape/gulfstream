@@ -61,12 +61,14 @@ returns seq if specifying max elements to pull"
       (when-let [d (if data (if (:ws? conn) 
                                (let [d (ws/decode data)]
                                  (cond 
+                                  (= (:op d) 0) (prn "continuation frame present!")
                                   (= (:op d) 1) (String. (:data d) "UTF8") ;;text frame
                                   (= (:op d) 2) (:data d) ;;binary frame
                                   (= (:op d) 8) (do(stop-client conn)nil) ;;op close?
+                                  (= (:op d) 9) (prn "ping frame!")
+                                  (= (:op d) 10) (prn "pong frame!")
                                   :else (do(put! ds (str "else" (:op d)))nil)))
                                (:data data)))]
-        ;(prn (String. (last(:data data))))
         (try(fun d)
             (catch Exception e (put! ds {:listen-error (.getMessage e)}))))
       (recur (get-chunk conn (:data(:frame conn)))))))

@@ -1,6 +1,6 @@
 (ns gulfstream.raw)
 
-(defn raw-mask [f]
+(defn mask [f]
   "final?,text?,op?,size 8 16 32, & two reserved bits
 32bit max size value, though having no size specified could be used for double/64bit"
   (let [b (bit-shift-left 1 7)
@@ -11,11 +11,11 @@
         b (- b 128)] ;;clear last bit if planning on using reserved bit
     (unchecked-byte b)))
 
-(defn- bits-lit [f]
+(defn bits-lit [f]
   "cerates seq of bits that are flagged; consider (map pos? (bits-lit b))"
   (map #(bit-and f (bit-shift-left 1 %)) (range 8)))
 
-(defn read-raw-mask [f]
+(defn read-mask [f]
   "first frame is header- lets convert;
 size returned is in bits ex: 32bit"
   (let [h (bits-lit f)]
@@ -27,7 +27,7 @@ size returned is in bits ex: 32bit"
      })
     ))
 
-(defn raw-frames [d & args]
+(defn frames [d & args]
   "input op code if any, and size of payload, returns bytes"
   (let [c (count d)
         op (some #{:op} args)
@@ -40,7 +40,7 @@ size returned is in bits ex: 32bit"
         _ (System/arraycopy d 0 f (count ba) (count d))]
     f))
 
-(defn read-raw-frames [b]
+(defn read-frames [b]
   (if-let [h (read-raw-mask (first b))]
     (let [offset (if (:op? h) 2 1)
           s (/ (:size h) 8)
@@ -49,4 +49,4 @@ size returned is in bits ex: 32bit"
     (if-not (empty? d) {:header h :size bs :data d}))))
 
 
-(read-raw-frames (raw-frames "hello"))
+(read-frames (frames "hello"))
