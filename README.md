@@ -6,10 +6,10 @@ Is both a regular tcp socket server as well as a websocket server, is able to se
 Can either be a websocket client or regular tcp socket client. Optional raw tcp socket header for more control.
 
 raw tcp header (in its current state) looks like: 
-first byte: [final? text? op/tag? 8bit-size 16bit-size 32bit-size reserved1 reserved2]
-second byte(either op/tag or starts on size): [op/tag here]
-size-block(either starts at second byte or 3rd byte, depends if op exists), spans either 1, 2 or 4 bytes to contain numeric length of data
-data-block: anything after size
+*first byte: [final? text? op/tag? 8bit-size 16bit-size 32bit-size reserved1 reserved2]
+*second byte(either op/tag or starts on size): [op/tag here]
+*size-block(either starts at second byte or 3rd byte, depends if op exists), spans either 1, 2 or 4 bytes to contain numeric length of data
+*data-block: anything after size
 
 I'm not sure how/if I'll implement r1 and r2 (if I do they might exist after the data payload). Op will likely be similar to websocket opcodes, though will likely include a route option (something like [header,op-route tag,8bit size of route,[route in bytes]])
 
