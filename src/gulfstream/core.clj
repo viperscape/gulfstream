@@ -72,12 +72,12 @@ returns seq if specifying max elements to pull"
                               (= (:op d) 1) (do(prn "route change!"){:route (String. (:data d) "UTF8")})
                               (not(:final?(:header d))) (do(prn "cont. frame!")(conj d{:text? (:text? (:header d)) :cont true}))
                               :else (if (empty? cont) (conj {:text? (:text? (:header d))} d) {:text? (:text? (:header d)) :cont true :final? true})))
-                           data)))]
+                           {:final? true :data (:data data)})))]
         ;(let [r {:route (or (:route d) (:route conn))}
               ;]
 
         (if (:final? d)
-          (let [d (if-not (:cont d) (if (:text? d) (String. (:data d) "UTF8") d)
+          (let [d (if-not (:cont d) (if (:text? d) (String. (:data d) "UTF8") (:data d))
                           (let [ba (byte-array (mapcat vec (conj cont (:data d))))]
                             (if (:text? d) (String. ba "UTF8") ba)))]
             (try(fun d)
