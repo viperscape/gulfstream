@@ -36,42 +36,54 @@ returns seq if specifying max elements to pull"
       (.close))))
 
 
-;;todo, take out buf and use only conn map
-(defn get-chunk [conn buf]
+(defn get-chunk [conn]
   "returns map of bytes and size of buffer for data recieved in stream"
-    (let [bufsize (.read (:bins conn) buf)] ;;blocking
-      {:size bufsize :data buf}))
+    (let [size (.read (:bins conn) (:data (:frame conn)))] ;;blocking
+      {:size size :data (:data (:frame conn))}))
 
-(defn try-get-chunk [conn buf]
+(defn try-get-chunk [conn]
   "non-waiting version of get-chunk"
   (if (> (.available (:ins conn)) 0)
-    (get-chunk conn buf)))
+    (get-chunk conn)))
 
 (defn str-chunk [chunk]
   "returns a utf8 string of the data-chunk map received in stream from get-chunk"
-  (prn (type(first(:data chunk))))
   (String. (:data chunk) 0 (:size chunk) "UTF8"))
 
 
 
 (defn listen! [conn fun]
   "listens to clients instream socket"
-  (loop [data (if-not (:ws? conn) (:frame conn))]
+  (loop [data (if-not (:ws? conn) (:frame conn)) cont []]
     (when(> (or (:size data)0) -1)
-      (when-let [d (if data (if (:ws? conn) 
-                               (let [d (ws/decode data)]
-                                 (cond 
-                                  (= (:op d) 0) (prn "continuation frame present!")
-                                  (= (:op d) 1) (String. (:data d) "UTF8") ;;text frame
-                                  (= (:op d) 2) (:data d) ;;binary frame
-                                  (= (:op d) 8) (do(stop-client conn)nil) ;;op close?
-                                  (= (:op d) 9) (prn "ping frame!")
-                                  (= (:op d) 10) (prn "pong frame!")
-                                  :else (do(put! ds (str "else" (:op d)))nil)))
-                               (:data data)))]
-        (try(fun d)
-            (catch Exception e (put! ds {:listen-error (.getMessage e)}))))
-      (recur (get-chunk conn (:data(:frame conn)))))))
+      (let [d (if data (if (:ws? conn) 
+                         (let [d (ws/decode data)] 
+                           (cond 
+                            (= (:op d) 0) (do(prn "cont. frame!")(conj d {:cont true})) ;;in ws only first frame represents type
+                            (= (:op d) 1) (if (:final? d) (conj d {:text? true}) (conj d {:text? true :cont true})) ;;text frame
+                            (= (:op d) 2) (if (:final? d) d (conj d {:cont true})) ;;binary frame
+                            (= (:op d) 8) (do(stop-client conn)nil) ;;op close?
+                            (= (:op d) 9) (send! conn (ws/encode (:data d) {:op 10} (if-not (:serversocket conn) :mask)) :prestine) ;;ping frame? return identical data in a pong frame
+                            (= (:op d) 10) (prn "pong frame!")
+                            :else (do(put! ds (str "else" (:op d)))nil)))
+                         (if (:raw? conn)
+                           (let [d (raw/read-frames data)]
+                             (cond
+                              (= (:op d) 1) (do(prn "route change!"){:route (String. (:data d) "UTF8")})
+                              (not(:final?(:header d))) (do(prn "cont. frame!")(conj d{:text? (:text? (:header d)) :cont true}))
+                              :else (if (empty? cont) (conj {:text? (:text? (:header d))} d) {:text? (:text? (:header d)) :cont true :final? true})))
+                           data)))]
+        ;(let [r {:route (or (:route d) (:route conn))}
+              ;]
+
+        (if (:final? d)
+          (let [d (if-not (:cont d) (if (:text? d) (String. (:data d) "UTF8") d)
+                          (let [ba (byte-array (mapcat vec (conj cont (:data d))))]
+                            (if (:text? d) (String. ba "UTF8") ba)))]
+            (try(fun d)
+                (catch Exception e (put! ds {:listen-error (.getMessage e)})))))
+
+        (recur (get-chunk conn) (if-not (:final? d) (conj cont (:data d)) []))))))
 
 
 (defmacro with-data [c v & body] 
@@ -101,12 +113,11 @@ the data is then applied to the functions specified within"
 
 (defn- handle-conn [conn]
   "typical logic for client: connect, receive loop, close"
-
   ;;we need to potentially upgrade websocket, attempt to capture first frame
   (let [conn 
         (if (:serversocket conn)
-          (let [buf (make-array Byte/TYPE 4096)
-                data (get-chunk conn buf) ;;blocks and waits
+          (let [conn (conj conn {:frame {:size 0 :data (make-array Byte/TYPE 4096)}})
+                data (get-chunk conn) ;;blocks and waits
                 conn (or(req-ws! (str-chunk data) conn)(conj conn {:ws? false}))
                 conn (conj conn {:frame data})]
             conn)
@@ -114,10 +125,9 @@ the data is then applied to the functions specified within"
           (let [conn (conj conn {:frame {:size 0 :data (make-array Byte/TYPE 4096)}})]
             (if (:ws? conn) 
               (do
-                 (send! (conj conn {:ws? nil}) (ws/new-handshake (:host conn) (:port conn) (:route conn)))
-                 (get-chunk conn (:data(:frame conn))) ;;wait and accept handshake, throw it away and start handler down below; todo: verify handshake sec key?
-               ))
-              conn))]
+                 (send! (conj conn {:ws? nil}) (ws/new-handshake (:host conn) (:port conn) {:route (:route conn)}))
+                 (get-chunk conn))) ;;wait and accept handshake, throw it away and start handler down below; todo: verify handshake sec key?
+            conn))]
 
     (try ((:handler conn) conn)
          (catch Exception e (put! ds (str (if (:serversocket conn) "server-side ") "handle error:" (.getMessage e)))))
@@ -160,7 +170,7 @@ merges client-map with server-map to supply serversocket and handler info"
         client (conj client {:thread (thread(handle-conn (conj client server)))})]
     client))
 (defn stop-client [conn]
-  (when-not (and(.isClosed (:socket conn))(if-not (:serversocket conn)(.isClosed (:serversocket conn))))
+  (when-not (.isClosed (:socket conn));(if-not (:serversocket conn)(.isClosed (:serversocket conn))))
     (if(:ws? conn) (send! conn (ws/encode (.getBytes "\r\n" "UTF8") {:op 8} (if-not (:serversocket conn) :mask)) :prestine)) ;;send websocket close, but don't wait for response
     (close-socket (:socket conn))))
 

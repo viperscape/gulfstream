@@ -32,6 +32,7 @@
 (defn decode [frame & args]
   "decodes websocket frame"
   (let [data (:data frame)
+        fin (pos?(bit-and (bit-shift-right (first data) 7) 1))
         op (bit-and (first data) 0x0f)]
     (if-not (>= op 8)
       (let [dlen (bit-and (second data) 127) ;0x7f/127
@@ -44,8 +45,8 @@
             (aset-byte msg j (byte (bit-xor (nth data i) (nth mask (mod j 4)))))
             (if (< i (dec(:size frame))) (recur (inc i) (inc j))))
           (System/arraycopy data mstart msg 0 (- (:size frame) mstart)))
-        {:data msg :op op})
-      {:data nil :op op})))
+        {:data msg :op op :final? fin})
+      {:data nil :op op :final? fin})))
 
 (defn get-key [req]
   (first(clojure.string/split(second(clojure.string/split req #"Sec-WebSocket-Key: ")) #"\r\n")))
@@ -66,7 +67,7 @@
        "\r\n")))
 
 (defn new-handshake [host port & args]
-  (let [route (some #{:route} args)]
+  (let [route (->> args (filter map?)(map :route) first)]
     (str "GET /" route " HTTP/1.1\r\n"
          "Host: " host ":" port "\r\n"
          "Upgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -77,3 +78,4 @@
       ; "Sec-WebSocket-Extensions: x-webkit-deflate-frame\r\n"
       ; "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/31.0.1650.63 Safari/537.36\r\n"
          "\r\n")))
+
